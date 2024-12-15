@@ -21,7 +21,7 @@ You can define type aliases for existing types to make code more readable or abs
 Warning: Not sure if i'll keep it because in lean we have `abbrev` and `def`, `def` does not change with reductions too much, but `abbrev` just changes in the first chance it gets.
 
 ```rust
-pub type Id = Int
+pub type Id := Int
 ```
 
 ## Algebraic Data Types (ADTs)
@@ -31,7 +31,7 @@ Two primary forms of ADTs are **product types** and **sum types**.
 These represent combinations of fields (like records or structs).
 
 ```rust
-type User = {
+type User := {
     name : String,
     kind : Kind,
     id : Id
@@ -42,7 +42,7 @@ type User = {
 These represent choices between variants (like enums).
 
 ```rust
-type Result(T, U) =
+type Result(T, U) :=
   | Ok(T)
   | Err(U)
 ```
@@ -51,7 +51,7 @@ type Result(T, U) =
 Indexed types let you define types that depend on a parameter.
 
 ```rust
-type Term : Nat -> Type =
+type Term : Nat -> Type :=
   | Zero              : Term(0)
   | Succ(t : Term(n)) : Term(n + 1)
 ```
@@ -60,7 +60,7 @@ type Term : Nat -> Type =
 Functions in dependently typed languages can depend on values, making them more expressive and allowing types to reflect the function's behavior based on arguments.
 
 ```rust
-let add (x: Nat, y: Nat) : Nat = {
+let add (x: Nat, y: Nat) : Nat := {
     x + y
 }
 ```
@@ -68,7 +68,7 @@ let add (x: Nat, y: Nat) : Nat = {
 Functions can also perform side-effects such as IO actions:
 
 ```rust
-let add (x, y: Nat) : IO Nat = do {
+let add (x, y: Nat) : IO Nat := do {
     print("meoow");
     return x + y
 }
@@ -77,13 +77,13 @@ let add (x, y: Nat) : IO Nat = do {
 You can also define functions with `let` and `fn`.
 
 ```rust
-let add = Nat -> Nat -> Nat = fn(x, y) => x + y
+let add : Nat -> Nat -> Nat := fn(x, y) => x + y
 ```
 
 Or with implicit arguments.
 
 ```rust
-let addVec {x, y : Nat} (v1: Vector(x), v2: Vector(x2)) : Nat = {
+let addVec {x, y : Nat} (v1: Vector(x), v2: Vector(x2)) : Nat := {
     x + y
 }
 ```
@@ -148,7 +148,7 @@ do {
 Conditional expressions can also be written as:
 
 ```rust
-let a = if condition { 1 } else { 2 }
+let a := if condition { 1 } else { 2 }
 ```
 
 You can also use `if` in a `do` block:
@@ -179,14 +179,14 @@ multi-line comment
 `let` is used to bind values to variables.
 
 ```rust
-let x = 5;
-let y = x + 10;
+let x := 5;
+let y := x + 10;
 ```
 
 You can also destructure types in the `let` expression:
 
 ```rust
-let User(name, id) = user;
+let User(name, id) := user;
 ```
 
 ## Optional Parameters and Named Parameters
@@ -195,7 +195,7 @@ You can define functions with optional parameters or named parameters.
 ### Optional Parameters
 
 ```rust
-let greet(name : String, greeting : String = "Hello") : String = {
+let greet(name : String, greeting : String := "Hello") : String := {
     return greeting + " " + name
 }
 ```
@@ -213,7 +213,7 @@ You can import external modules or define external types that are implemented in
 opaque Mutex : Type
 
 // Links external function for multiple backends
-external createMutex : IO Mutex = "llvm: something_dumb, js: something_in_js"
+external createMutex : IO Mutex := "llvm: something_dumb, js: something_in_js"
 
 // IO function that is called before the program begins.
 initialize onStart
@@ -228,7 +228,7 @@ type Result(T, U) =
   | Ok(T)
   | Err(U)
 
-let process_file(file : String) : IO(Result(Data, String)) = do {
+let process_file(file : String) : IO(Result(Data, String)) := do {
     if <- file_exists(file) {
         return Ok(read_file(file))
     } else {
@@ -242,10 +242,34 @@ type Vector (t : Type) : Nat -> Type =
   | Nil                            : Vector(t, 0)     // A vector of size 0
   | Cons(x : t, xs : Vector(t, n)) : Vector(t, n + 1) // A vector of size n+1
 
-let appendVectors {n1, n2 : Nat} (v1 : Vector(n1), v2 : Vector(n2)) : Vector(n1 + n2) = {
+let appendVectors {n1, n2 : Nat} (v1 : Vector(n1), v2 : Vector(n2)) : Vector(n1 + n2) := {
     match v1 {
       | .Nil => v2
       | .Cons(x, xs) => .Cons(x, appendVectors(xs, v2))
     }
 }
+```
+
+# Equality
+
+In dependently typed languages, equality can be expressed in different forms. There are three common kinds of equality:
+
+- `Definitional Equality (:=)`: Direct, no proof needed. Example: `a := 2`.
+- `Propositional Equality (=)`: Equality as a proposition, requiring a proof. Example: `1 + 1 = 2` (proven with rfl).
+- `Boolean Equality (==)`: Runtime check that returns true or false. Example: 1 + 1 == 2 (evaluates to true).
+
+```rust
+// Definitional equality (`:=`):
+// Two terms are equal because they are literally the same (no proof needed).
+let idk := 3
+
+// Propositional equality (`=`):
+// Proving that two terms are equal. Requires a proof.
+let eq : 1 + 1 = 2 =
+    rfl  // Simple proof: 1 + 1 is definitionally equal to 2
+
+// Boolean equality (`==`):
+// Checks if two terms are equal at runtime, returning a boolean.
+let isEqual : Bool = 
+    1 + 1 == 2  // Evaluates to true
 ```
