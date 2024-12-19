@@ -1,4 +1,5 @@
 (executable
  (public_name lang)
  (name main)
- (libraries lang))
+ (modules main cli build)
+ (libraries lang cmdliner))
