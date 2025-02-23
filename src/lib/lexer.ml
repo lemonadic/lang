@@ -63,7 +63,6 @@ let provider buf () =
   token, start, stop
 
 (* `from_string` converts an input string into a sequence of tokens using the provided lexer. *)
-
 let from_string f string =
   provider (from_string string)
   |> MenhirLib.Convert.Simplified.traditional2revised f

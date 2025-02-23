@@ -4,20 +4,7 @@ Licensed under the Apache License, Version 2.0 as described in the file LICENSE.
 
 Authors: Davi William, Sofia Rodrigues
 *)
-
-(* A point in the source code defined using line and column. *)
-type point = {
-  line: int;
-  column: int
-}
-[@@deriving show]
-
-(* A position represents a location in the source code. *)
-type position = {
-  start: point;
-  end': point;
-}
-[@@deriving show]
+open Location
 
 (* An identifier is a string with a position in the source code, usually representing a name. *)
 type identifier = string * position
