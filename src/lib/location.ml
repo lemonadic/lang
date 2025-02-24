@@ -35,7 +35,6 @@ let expand_positions ranges =
   let determine_lines l1 l2 =
     match l2 - l1 with
     | 0 -> [l1 - 1; l1; l1 + 1]
-    | 1 -> [l1 - 1; l1; l2; l2 + 1]
     | _ -> [l1 - 1; l1; l2; l2 + 1] in
 
   let process_range acc {start_pos; end_pos} =

@@ -50,4 +50,3 @@ let print_compiler_error fmt error source =
   ) sorted_lines;
 
   Format.fprintf fmt "\n";
-  
