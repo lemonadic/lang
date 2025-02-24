@@ -21,13 +21,6 @@ type position = {
 }
 [@@deriving show]
 
-(* A position represents a location in a source code. *)
-type range = {
-  file: string;
-  position: position
-}
-[@@deriving show]
-
 (** Expands a list of ranges into a set of selected line numbers. *)
 let expand_positions ranges =
   let add_if_valid acc line = if line > 0 then IntSet.add line acc else acc in

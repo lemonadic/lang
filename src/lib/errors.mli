@@ -9,7 +9,8 @@ open Location
 type compiler_error = {
   id : int;
   message : string;
-  location : range;
+  file : string;
+  location : position;
   hints : (string * position) list;
   additional_info : (string * string) list;
 }

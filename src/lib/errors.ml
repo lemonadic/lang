@@ -9,7 +9,8 @@ open Location
 type compiler_error = {
   id : int;
   message : string;
-  location : range;
+  file : string;
+  location : position;
   hints : (string * position) list;
   additional_info : (string * string) list;
 }
@@ -26,12 +27,12 @@ let print_compiler_error fmt error source =
 
   Format.fprintf fmt "\n %s%sERROR E%04d%s: %s%s\n" bold red error.id white error.message reset;
 
-  Format.fprintf fmt "  --> %s:" error.location.file;
-  pp_range fmt error.location.position;
+  Format.fprintf fmt "  --> %s:" error.file;
+  pp_range fmt error.location;
   Format.fprintf fmt "\n\n";
 
   (* Split source code into lines and highlight relevant lines *)
-  let relevant_lines = expand_positions (error.location.position :: (List.map (fun (_, pos) -> pos) error.hints)) in
+  let relevant_lines = expand_positions (error.location :: (List.map (fun (_, pos) -> pos) error.hints)) in
   let sorted_lines = List.sort_uniq compare relevant_lines in
   let source_lines = String.split_on_char '\n' source |> Array.of_list in
 
@@ -41,9 +42,9 @@ let print_compiler_error fmt error source =
       let line = source_lines.(line_num - 1) in
       Format.fprintf fmt "%4d | %s\n" line_num line;
 
-      if line_num = error.location.position.start_pos.line then
-        let start_col = error.location.position.start_pos.column in
-        let end_col = error.location.position.end_pos.column in
+      if line_num = error.location.start_pos.line then
+        let start_col = error.location.start_pos.column in
+        let end_col = error.location.end_pos.column in
         let error_length = end_col - start_col in
         let caret_line = String.make (start_col) ' ' ^ String.make error_length '^' in
         Format.fprintf fmt "     | %s%s%s%s\n" red bold caret_line reset
