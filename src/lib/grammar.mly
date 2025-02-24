@@ -31,7 +31,7 @@ open Location
 
 (* Macro for creating some rule with a position in a tuple. *)
 localized(x):
-  | d = x { (d, (location $loc)) }
+  | d = x { (d, (mk_ast_position $loc)) }
 
 (* The entrypoint of the entire parser, it parses a sequence of top level definitons. *)
 program:

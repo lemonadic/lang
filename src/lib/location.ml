@@ -39,7 +39,7 @@ let expand_positions ranges =
   |> IntSet.to_list
 
 (* Creates an AST position using the Menhir internal position *)
-let location (startpos, endpos) = {
+let mk_ast_position (startpos, endpos) = {
   start_pos = {
     column = startpos.Lexing.pos_cnum - startpos.Lexing.pos_bol;
     line = startpos.Lexing.pos_lnum
