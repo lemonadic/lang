@@ -24,7 +24,7 @@ let parse file (buf : Sedlexing.lexbuf) =
     | Lexer.Invalid_token msg -> Error (handle_error file buf 1 ("Lexical error: " ^ msg) [])
     | Grammar.Error -> Error (handle_error file buf 2 "Parse error" [])
 
-    (* Parses a source string from the given string. *)
+(* Parses a source string from the given string. *)
 let parse_from_source file source =
   parse file (Sedlexing.Utf8.from_string source)
 
