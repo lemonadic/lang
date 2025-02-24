@@ -14,8 +14,18 @@ type point = {
 
 (* A position represents a location in the source code. *)
 type position = {
-  file: int option;
-  start: point;
-  end': point;
+  start_pos: point;
+  end_pos: point;
 }
 [@@deriving show]
+
+(* A position represents a location in a source code. *)
+type range = {
+  file: string;
+  position: position
+}
+[@@deriving show]
+
+val expand_positions : position list -> int list
+
+val location : Lexing.position * Lexing.position -> position

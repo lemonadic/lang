@@ -8,19 +8,6 @@ Authors: Davi William, Sofia Rodrigues
 open Ast
 open Location
 
-(* Creates an AST position using the Menhir internal position *)
-let loc (startpos, endpos) = {
-  file = None;
-  start = {
-    column = startpos.Lexing.pos_cnum - startpos.Lexing.pos_bol;
-    line = startpos.Lexing.pos_lnum
-  };
-  end' = {
-    column = endpos.Lexing.pos_cnum - endpos.Lexing.pos_bol;
-    line = endpos.Lexing.pos_lnum
-  }
-}
-
 %}
 
 %token <string> IDENT
@@ -44,7 +31,7 @@ let loc (startpos, endpos) = {
 
 (* Macro for creating some rule with a position in a tuple. *)
 localized(x):
-  | d = x { (d, (loc $loc)) }
+  | d = x { (d, (location $loc)) }
 
 (* The entrypoint of the entire parser, it parses a sequence of top level definitons. *)
 program:

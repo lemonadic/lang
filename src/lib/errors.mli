@@ -9,7 +9,10 @@ open Location
 type compiler_error = {
   id : int;
   message : string;
-  location : position option;
-  hints : string list;
+  location : range;
+  hints : (string * position) list;
   additional_info : (string * string) list;
 }
+
+(* Pretty prints an error message. *)
+val print_compiler_error : Format.formatter -> compiler_error -> string -> unit
