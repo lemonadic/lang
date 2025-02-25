@@ -5,7 +5,6 @@ Licensed under the Apache License, Version 2.0 as described in the file LICENSE.
 Authors: Júnior Nascimento
 *)
 open Lang
-open Sedlexing
 
 type compiler_options = {
   input_files : string list;
@@ -41,22 +40,19 @@ let read_until_eof () =
   read_loop()
 
 let parse_from_stdin json_output =
-  let str = read_until_eof () in
-  let buf = Sedlexing.Utf8.from_string str in
-  try
-    let ast = MenhirLib.Convert.Simplified.traditional2revised Grammar.program (Lexer.provider buf) in
+  let source_code = read_until_eof () in
+  let parsed = Parser.parse_from_source "stdin" source_code in
+
+  match parsed with
+  | Ok ast ->
     if json_output then
       failwith "TODO implement json output"
     else
       print_endline (Ast.show_program ast);
       `Ok()
-  with
-    | Lexer.Invalid_token msg ->
-      Printf.eprintf "Lexical error: %s at position %d\n" msg (lexeme_start buf);
-      exit 1
-    | Grammar.Error ->
-      Printf.eprintf "Parse error starting at %d, ending at %d\n" (lexeme_start buf) (lexeme_end buf);
-      exit 1
+  | Error error ->
+    Errors.print_compiler_error Format.err_formatter error source_code;
+    exit 1
 
 let compile options () =
     Printf.printf "Compiling files: %s\n" (String.concat ", " options.input_files);
@@ -71,7 +67,7 @@ let compile options () =
 
 let process options =
   match options with
-  | { features = true; _ } ->  print_features ()
+  | { features = true; _ } -> print_features ()
   | { from_stdin = true; json_output; _ } -> parse_from_stdin json_output
   | { input_files = []; _ } ->
       prerr_endline "Error: No input files provided.";
