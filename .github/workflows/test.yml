@@ -2,26 +2,26 @@ name: Run Tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set-up OCaml
-      uses: ocaml/setup-ocaml@v3
-      with:
-        ocaml-compiler: 5
+      - name: Set-up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 5
 
-    - name: Install dependencies
-      run: |
-        opam install . --deps-only --with-test
-        opam install ppx_expect ppx_deriving sedlex menhir cmdliner 
+      - name: Install dependencies
+        run: |
+          opam install . --deps-only --with-test
+          opam install ppx_expect ppx_deriving sedlex menhir cmdliner
 
-    - name: Run tests
-      run: opam exec -- dune runtest  
+      - name: Run tests
+        run: opam exec -- dune runtest
