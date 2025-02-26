@@ -17,6 +17,7 @@ depends: [
   "sedlex"
   "ppx_expect"
   "menhirLib"
+  "alcotest" {with-test}
   "odoc" {with-doc}
 ]
 build: [
