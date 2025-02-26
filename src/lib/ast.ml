@@ -49,6 +49,9 @@ and expr_kind =
   | ExprCall of expr * expr list
   | ExprMatch of expr * (pattern * expr) list
   | ExprBlock of sttm list
+  | ExprPi of identifier option * expr * expr
+  | ExprLambda of identifier * expr
+  | ExprAccess of expr * expr
 [@@deriving show]
 
 (* An expression consists of its kind and its position in the source code. *)
