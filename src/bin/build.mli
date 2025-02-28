@@ -18,15 +18,14 @@ type compiler_options = {
   features : bool;
 }
 
-(**
-    Processes the given compiler options and performs the appropriate actions.
+val process : compiler_options -> [ `Ok of unit | `Error of string ]
+(** Processes the given compiler options and performs the appropriate actions.
 
     - If [features] is set to [true], it prints the supported features.
-    - If [from_stdin] is [true], it reads input from standard input and parses it.
+    - If [from_stdin] is [true], it reads input from standard input and parses
+      it.
     - If no input files are provided, it returns an error.
     - Otherwise, it proceeds to compile the provided input files.
 
     @param options The compiler options to process.
-    @return [`Ok ()] if processing succeeds, [`Error of string] otherwise.
-*)
-val process : compiler_options -> [`Ok of unit | `Error of string]
+    @return [`Ok ()] if processing succeeds, [`Error of string] otherwise. *)
