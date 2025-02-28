@@ -12,22 +12,14 @@ exception Invalid_token of string
 (* Regular expressions for tokens *)
 
 let whitespace = [%sedlex.regexp? Plus (' ' | '\n' | '\t' | '\r')]
-
-let digit = [%sedlex.regexp? '0'..'9']
-
-let lower = [%sedlex.regexp? 'a'..'z']
-
-let upper = [%sedlex.regexp? 'A'..'Z']
-
+let digit = [%sedlex.regexp? '0' .. '9']
+let lower = [%sedlex.regexp? 'a' .. 'z']
+let upper = [%sedlex.regexp? 'A' .. 'Z']
 let alpha = [%sedlex.regexp? lower | upper]
-
 let wildcard = [%sedlex.regexp? '_', Star (alpha | digit | '_')]
-
 let identifier = [%sedlex.regexp? (alpha | '_'), Star (alpha | digit | '_')]
-
 let integer = [%sedlex.regexp? Plus digit]
-
-let string_literal = [%sedlex.regexp? '"', Star (Compl '"'), '"' ]
+let string_literal = [%sedlex.regexp? '"', Star (Compl '"'), '"']
 
 (* Main tokenizer function *)
 let rec tokenizer buf =
@@ -60,7 +52,7 @@ let rec tokenizer buf =
 let provider buf () =
   let token = tokenizer buf in
   let start, stop = Sedlexing.lexing_positions buf in
-  token, start, stop
+  (token, start, stop)
 
 (* `from_string` converts an input string into a sequence of tokens using the provided lexer. *)
 let from_string f string =
