@@ -49,14 +49,34 @@ literal_kind:
 literal:
   | localized(literal_kind) { $1 }
 
+acessor_kind:
+  | ident { ExprVar $1 }
+  | literal { ExprLit $1 }
+
+acessor:
+  | localized(acessor_kind) { $1 }
+
 atom_kind:
   | ident { ExprVar $1 }
   | literal { ExprLit $1 }
-  | expr LPAREN separated_list(COMMA, expr) RPAREN { ExprCall ($1, $3) }
+  | atom LPAREN separated_list(COMMA, expr) RPAREN { ExprCall ($1, $3) }
+  | atom DOT acessor { ExprAccess ($1, $3) }
   | LPAREN expr_kind RPAREN { $2 }
 
 atom:
   | localized(atom_kind) { $1 }
+
+expr_kind:
+  | MATCH; scrutinee = expr; LBRACE; cases = list(match_case); RBRACE { ExprMatch (scrutinee, cases) }
+  | LBRACE; separated_list(COMMA, stmt); RBRACE { ExprBlock $2 }
+
+  | atom ARROW expr { ExprPi (None, $1, $3) }
+  | LPAREN ident COLON expr RPAREN ARROW expr  { ExprPi ((Some $2), $4, $7) }
+  | FN ident ARROW expr { ExprLambda ($2, $4) }
+  | atom_kind { $1 }
+
+expr:
+  | localized(expr_kind) { $1 }
 
 pattern_kind:
   | ident { PVar $1 }
@@ -78,13 +98,6 @@ stmt_kind:
 stmt:
   | localized(stmt_kind) { $1 }
 
-expr_kind:
-  | MATCH; scrutinee = expr; LBRACE; cases = list(match_case); RBRACE { ExprMatch (scrutinee, cases) }
-  | LBRACE; separated_list(COMMA, stmt); RBRACE { ExprBlock $2 }
-  | atom_kind { $1 }
-
-expr:
-  | localized(expr_kind) { $1 }
 
 param:
   | name = ident; COLON; typ = expr { (name, typ) }

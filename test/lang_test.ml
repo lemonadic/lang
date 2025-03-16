@@ -29,9 +29,11 @@ let get_test_files dir =
 (* -------- *)
 
 let parse source =
+  let source = read_file source in
   match Lang.Parser.parse_from_source "test" source with
-  | Ok(x) -> String.concat "ok: " [Lang.Ast.show_program x]
-  | Error x -> String.concat "error: " [x.message]
+  | Ok(x) -> String.concat "" ["ok: "; Lang.Ast.show_program x]
+  | Error err -> String.concat "" ["error: "; err.message; " "; string_of_int err.location.start_pos.line; ":"; string_of_int err.location.start_pos.column; "~";
+    string_of_int err.location.end_pos.line; ":"; string_of_int err.location.end_pos.column]
 
 let () =
   let test_dir = "../../../suite/parser" in

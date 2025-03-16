@@ -1,1 +1,1 @@
-let a : s = "Hello\027[2m"
+let a : s = "Hello\023[2m"
