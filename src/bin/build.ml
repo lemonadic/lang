@@ -55,15 +55,42 @@ let parse_from_stdin json_output =
     exit 1
 
 let compile options () =
-    Printf.printf "Compiling files: %s\n" (String.concat ", " options.input_files);
-    Printf.printf "Output executable: %s\n" options.output;
-    Printf.printf "Backend: %s\n" options.backend;
-    Printf.printf "Root directory: %s\n" options.root_dir;
-    Printf.printf "JSON output: %b\n" options.json_output;
-    Printf.printf "Module tree JSON: %b\n" options.module_tree_json;
-    Printf.printf "Threads: %d\n" options.threads;
-    Printf.printf "Dependencies: %b\n" options.dependencies;
-    `Ok ()
+  Printf.printf "Compiling files: %s\n" (String.concat ", " options.input_files);
+  
+  (* Parse the input files *)
+  let parse_file filename =
+    let channel = open_in filename in
+    let result = Parser.parse_from_channel filename channel in
+    close_in channel;
+    result
+  in
+  
+  (* Parse all input files and combine into a single program *)
+  let parsed_programs = 
+    List.map parse_file options.input_files
+    |> List.fold_left 
+         (fun acc result -> 
+           match acc, result with
+           | Ok acc_prog, Ok file_prog -> Ok (acc_prog @ file_prog)
+           | Error e, _ -> Error e
+           | _, Error e -> Error e)
+         (Ok [])
+  in
+  
+  match parsed_programs with
+  | Ok program ->
+      (* Type check the program *)
+      (match Type_checker.type_check_program program with
+       | Ok _ -> 
+           Printf.printf "Type checking successful!\n";
+           (* Continue with code generation *)
+           `Ok ()
+       | Error error ->
+           Errors.print_compiler_error Format.err_formatter error "";
+           exit 1)
+  | Error error ->
+      Errors.print_compiler_error Format.err_formatter error "";
+      exit 1
 
 let process options =
   match options with

@@ -1,3 +1,7 @@
 (test
  (name lang_test)
  (libraries base lang alcotest))
+
+(test
+ (name type_checker_test)
+ (libraries base lang alcotest))
