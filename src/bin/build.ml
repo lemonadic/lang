@@ -19,7 +19,7 @@ type compiler_options = {
   features : bool;
 }
 
-let print_features ()  =
+let print_features () =
   print_endline "Supported features:";
   print_endline "- Compilation from files or stdin";
   print_endline "- Multiple backends (e.g., LLVM)";
@@ -28,16 +28,15 @@ let print_features ()  =
 
 let read_until_eof () =
   let buffer = Buffer.create 2048 in
-  let rec read_loop() =
-    let line = try Some(read_line()) with End_of_file -> None in
+  let rec read_loop () =
+    let line = try Some (read_line ()) with End_of_file -> None in
     match line with
     | None -> Buffer.contents buffer
-    | Some(line) -> (
-      Buffer.add_string buffer (line ^ "\n");
-      read_loop()
-    )
+    | Some line ->
+        Buffer.add_string buffer (line ^ "\n");
+        read_loop ()
   in
-  read_loop()
+  read_loop ()
 
 let parse_from_stdin json_output =
   let source_code = read_until_eof () in
@@ -45,25 +44,23 @@ let parse_from_stdin json_output =
 
   match parsed with
   | Ok ast ->
-    if json_output then
-      failwith "TODO implement json output"
-    else
-      print_endline (Ast.show_program ast);
-      `Ok()
+      if json_output then failwith "TODO implement json output"
+      else print_endline (Ast.show_program ast);
+      `Ok ()
   | Error error ->
-    Errors.print_compiler_error Format.err_formatter error source_code;
-    exit 1
+      Errors.print_compiler_error Format.err_formatter error source_code;
+      exit 1
 
 let compile options () =
-    Printf.printf "Compiling files: %s\n" (String.concat ", " options.input_files);
-    Printf.printf "Output executable: %s\n" options.output;
-    Printf.printf "Backend: %s\n" options.backend;
-    Printf.printf "Root directory: %s\n" options.root_dir;
-    Printf.printf "JSON output: %b\n" options.json_output;
-    Printf.printf "Module tree JSON: %b\n" options.module_tree_json;
-    Printf.printf "Threads: %d\n" options.threads;
-    Printf.printf "Dependencies: %b\n" options.dependencies;
-    `Ok ()
+  Printf.printf "Compiling files: %s\n" (String.concat ", " options.input_files);
+  Printf.printf "Output executable: %s\n" options.output;
+  Printf.printf "Backend: %s\n" options.backend;
+  Printf.printf "Root directory: %s\n" options.root_dir;
+  Printf.printf "JSON output: %b\n" options.json_output;
+  Printf.printf "Module tree JSON: %b\n" options.module_tree_json;
+  Printf.printf "Threads: %d\n" options.threads;
+  Printf.printf "Dependencies: %b\n" options.dependencies;
+  `Ok ()
 
 let process options =
   match options with
