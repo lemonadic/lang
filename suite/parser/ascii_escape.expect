@@ -1,1 +1,24 @@
-!
+ok: [{ Ast.value =
+   (Ast.LetDecl
+      { Ast.name =
+        ("a",
+         { Location.start_pos = { Location.line = 1; column = 4 };
+           end_pos = { Location.line = 1; column = 5 } });
+        params = [];
+        return_type =
+        ((Ast.ExprVar
+            ("s",
+             { Location.start_pos = { Location.line = 1; column = 8 };
+               end_pos = { Location.line = 1; column = 9 } })),
+         { Location.start_pos = { Location.line = 1; column = 8 };
+           end_pos = { Location.line = 1; column = 9 } });
+        body =
+        ((Ast.ExprLit
+            ((Ast.LitString "Hello\019[2m"),
+             { Location.start_pos = { Location.line = 1; column = 12 };
+               end_pos = { Location.line = 1; column = 26 } })),
+         { Location.start_pos = { Location.line = 1; column = 12 };
+           end_pos = { Location.line = 1; column = 26 } })
+        });
+   visibility = Ast.Private }
+  ]

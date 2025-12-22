@@ -17,10 +17,9 @@ let golden_test process file () =
   let actual_output = process file in
   if Sys.file_exists expect_file then
     let expected_output = read_file expect_file in
-    Alcotest.(check string)
-      ("Golden test for " ^ file)
-      expected_output actual_output
-  else write_file expect_file actual_output
+    Alcotest.(check string) ("Golden test for " ^ file) expected_output actual_output
+  else
+    write_file expect_file actual_output
 
 let get_test_files dir =
   Array.to_list (Sys.readdir dir)
@@ -30,14 +29,13 @@ let get_test_files dir =
 (* -------- *)
 
 let parse source =
+  let source = read_file source in
   match Lang.Parser.parse_from_source "test" source with
-  | Ok x -> String.concat "ok: " [ Lang.Ast.show_program x ]
-  | Error x -> String.concat "error: " [ x.message ]
+  | Ok(x) -> String.concat "" ["ok: "; Lang.Ast.show_program x]
+  | Error err -> String.concat "" ["error: "; err.message; " "; string_of_int err.location.start_pos.line; ":"; string_of_int err.location.start_pos.column; "~";
+    string_of_int err.location.end_pos.line; ":"; string_of_int err.location.end_pos.column]
 
 let () =
   let test_dir = "../../../suite/parser" in
-  let test_cases =
-    get_test_files test_dir
-    |> List.map (fun file -> test_case file `Quick (golden_test parse file))
-  in
-  Alcotest.run "Parser Golden Tests" [ ("Parser output", test_cases) ]
+  let test_cases = get_test_files test_dir |> List.map (fun file -> test_case file `Quick (golden_test parse file)) in
+  Alcotest.run "Parser Golden Tests" [ "Parser output", test_cases ]
