@@ -6,619 +6,444 @@ Authors: Júnior Nascimento
 *)
 
 open Ast
-open Type_expr
-open Type_env
-open Location
+open Value
 open Errors
+open Location
 
-(* Type checking error codes *)
-let error_unbound_variable = 1001
-let error_type_mismatch = 1002
-let error_not_a_function = 1003
-let error_return_type_mismatch = 1004
-let error_undefined_type = 1005
-let error_pattern_match = 1006
-let error_incomplete_match = 1007
+(* ========================================================================
+   BIDIRECTIONAL TYPE CHECKING
+   ========================================================================
 
-(* Create a type checking error *)
-let make_type_error id message file location hints =
-  { id; message; file; location; hints; additional_info = [] }
+   The type checker has two modes (two "directions"):
 
-(** Result type for type checking operations *)
-type 'a type_check_result = ('a, compiler_error) result
+   1. CHECK mode: [check ctx expr expected_type]
+      "I know this expression should have this type — verify it."
+      Used when we have type information flowing DOWN from the context.
+      Example: [let x : int = expr] — we check [expr] against [int].
 
-(** Bind operator for the result monad *)
-let ( >>= ) result f =
-  match result with
-  | Ok value -> f value
-  | Error err -> Error err
+   2. INFER mode: [infer ctx expr]
+      "I don't know the type — figure it out."
+      Used when type information flows UP from the expression.
+      Example: [5] infers to [int], [ExprVar "x"] infers from the context.
 
-(** Map operator for the result monad *)
-let ( >>| ) result f =
-  match result with
-  | Ok value -> Ok (f value)
-  | Error err -> Error err
+   The key rule connecting them: when checking and we don't have a special
+   case, fall back to infer-then-compare:
+     check ctx expr expected =
+       let inferred = infer ctx expr in
+       if conv inferred expected then OK else TYPE MISMATCH
 
-(** Creates a type error for an unbound variable *)
-let unbound_variable_error name loc =
-  make_type_error 
-    error_unbound_variable
-    ("Unbound variable: " ^ name)
-    ""  (* file name will be filled in later *)
+   This separation is what makes dependent type checking work:
+   - Lambdas can only be CHECKED (we need to know the domain type)
+   - Variables and applications can be INFERRED
+   - Pi types infer to [Type] *)
+
+(** Result monad helpers *)
+let ( >>= ) r f = match r with Ok v -> f v | Error e -> Error e
+
+(* ========================================================================
+   TYPE CHECKING CONTEXT
+   ======================================================================== *)
+
+(** The context carries everything we need during type checking:
+    - [env]: for EVALUATING expressions to values (name → value)
+    - [types]: for LOOKING UP types of variables (name → type-as-value)
+    - [level]: de Bruijn level counter for generating fresh variables *)
+type ctx = {
+  env : env;
+  types : (string * value) list;
+  level : int;
+}
+
+(** Extend context with a defined name (known value) *)
+let define ctx name ty value =
+  { env = (name, value) :: ctx.env;
+    types = (name, ty) :: ctx.types;
+    level = ctx.level; }
+
+(** Extend context with a fresh variable (for going under binders).
+    Returns the fresh variable AND the extended context.
+
+    When checking under a binder like [(x : A) -> B], we don't know [x]'s
+    value. So we create a fresh neutral variable [VNeutral(A, NVar level)]
+    as a placeholder. This lets us evaluate [B] and check it. *)
+let bind ctx name ty =
+  let fresh = VNeutral (ty, NVar ctx.level) in
+  (fresh, { env = (name, fresh) :: ctx.env;
+            types = (name, ty) :: ctx.types;
+            level = ctx.level + 1; })
+
+(** The initial context with primitive types.
+    Each primitive is both a TYPE (has type [Type]) and a VALUE. *)
+let initial_ctx () =
+  { env = [
+      ("Type",   VType);
+      ("int",    VIntType);
+      ("string", VStringType);
+      ("bool",   VBoolType);
+      ("unit",   VUnitType);
+    ];
+    types = [
+      ("Type",   VType);      (* Type : Type — inconsistent but practical *)
+      ("int",    VType);      (* int : Type *)
+      ("string", VType);      (* string : Type *)
+      ("bool",   VType);      (* bool : Type *)
+      ("unit",   VType);      (* unit : Type *)
+    ];
+    level = 0;
+  }
+
+(* ========================================================================
+   ERROR HELPERS
+   ======================================================================== *)
+
+let dummy_pos =
+  { start_pos = { line = 0; column = 0 };
+    end_pos = { line = 0; column = 0 }; }
+
+let make_error id message loc =
+  { id; message; file = ""; location = loc; hints = []; additional_info = [] }
+
+let type_mismatch_error ctx expected actual loc =
+  make_error 1002
+    ("Type mismatch: expected " ^ Eval.show_value ctx.level expected
+     ^ ", got " ^ Eval.show_value ctx.level actual)
     loc
-    []
 
-(** Creates a type error for a type mismatch *)
-let type_mismatch_error expected actual loc =
-  make_type_error
-    error_type_mismatch
-    ("Type mismatch: expected " ^ show_type_expr expected ^ 
-     ", got " ^ show_type_expr actual)
-    ""
+let unbound_var_error name loc =
+  make_error 1001 ("Unbound variable: " ^ name) loc
+
+let not_a_function_error ctx ty loc =
+  make_error 1003
+    ("Expected a function type, got " ^ Eval.show_value ctx.level ty)
     loc
-    []
 
-(** Creates a type error for calling a non-function *)
-let not_a_function_error ty loc =
-  make_type_error
-    error_not_a_function
-    ("This expression has type " ^ show_type_expr ty ^ 
-     " but is used as a function")
-    ""
-    loc
-    []
+(* ========================================================================
+   AST BUILDERS — for synthesizing expressions from declarations
+   ======================================================================== *)
 
-(** Creates a type error for pattern matching *)
-let pattern_match_error message loc =
-  make_type_error
-    error_pattern_match
-    message
-    ""
-    loc
-    []
+(** Build a nested Pi type from parameters and a return type.
+    [(x: A, y: B) -> C] becomes [ExprPi(x, A, ExprPi(y, B, C))] *)
+let build_pi_type params return_type =
+  List.fold_right (fun ((name, name_pos), type_expr) acc ->
+    (ExprPi (Some (name, name_pos), type_expr, acc), dummy_pos)
+  ) params return_type
 
-(** Creates a type error for incomplete pattern matching *)
-let incomplete_match_error ty loc =
-  make_type_error
-    error_incomplete_match
-    ("Pattern matching on type " ^ show_type_expr ty ^ 
-     " is not exhaustive")
-    ""
-    loc
-    []
+(** Build nested lambdas from parameters and a body.
+    [(x: A, y: B) => body] becomes [fn x => fn y => body] *)
+let build_lambda params body =
+  List.fold_right (fun ((name, name_pos), _) acc ->
+    (ExprLambda ((name, name_pos), acc), dummy_pos)
+  ) params body
 
-(** Checks if two types are compatible (structural equality) *)
-let rec type_compatible t1 t2 =
-  match (t1, t2) with
-  | (TypeVar v1, TypeVar v2) -> 
-      v1 = v2
-  | (TypeConst c1, TypeConst c2) -> 
-      c1 = c2
-  | (TypeApp(c1, args1), TypeApp(c2, args2)) ->
-      c1 = c2 && 
-      List.length args1 = List.length args2 &&
-      List.for_all2 type_compatible args1 args2
-  | (TypeArrow(a1, r1), TypeArrow(a2, r2)) ->
-      type_compatible a1 a2 && type_compatible r1 r2
-  | (TypeRecord fields1, TypeRecord fields2) ->
-      (* Check if all fields in the first record are in the second with compatible types *)
-      List.for_all 
-        (fun (name1, ty1) -> 
-          List.exists 
-            (fun (name2, ty2) -> name1 = name2 && type_compatible ty1 ty2) 
-            fields2)
-        fields1
-  | _ -> false
+(* ========================================================================
+   BIDIRECTIONAL TYPE CHECKER — check and infer
+   ======================================================================== *)
 
-(** Type checks a literal expression *)
-let type_check_literal = function
-  | (LitInt _, _) -> type_int
-  | (LitString _, _) -> type_string
+(** CHECK mode: verify that [expr] has type [expected].
 
-(** Forward declarations for mutually recursive functions *)
-let rec type_check_expr env expr expected_type_opt =
-  let (expr_kind, loc) = expr in
-  match expr_kind with
-  | ExprVar (name, _) -> 
-      type_check_var env name loc expected_type_opt
-  | ExprLit lit -> 
-      type_check_lit lit loc expected_type_opt
-  | ExprCall (func, args) -> 
-      type_check_call env func args loc expected_type_opt
-  | ExprMatch (scrutinee, cases) ->
-      type_check_match env scrutinee cases loc expected_type_opt
+    Special cases handle constructs that need type information pushed down:
+    - Lambdas: need the Pi type to know the domain
+    - Blocks: propagate the expected type to the last expression
+
+    Everything else falls through to infer-then-compare. *)
+let rec check ctx (expr : expr) (expected : value)
+    : (unit, compiler_error) result =
+  let (kind, loc) = expr in
+  match kind with
+  (* Lambda checked against Pi: introduce the binding *)
+  | ExprLambda ((name, _), body) ->
+    check_lambda ctx name body expected loc
+
+  (* Blocks: propagate expected type to the last statement *)
   | ExprBlock stmts ->
-      type_check_block env stmts loc expected_type_opt
-  | ExprLambda (name, body) ->
-      type_check_lambda env name body loc expected_type_opt
-  | ExprAccess (record, field) ->
-      type_check_access env record field loc expected_type_opt
-  | ExprPi (_, _, _) ->
-      Error (make_type_error
-              error_undefined_type
-              "Pi expressions should only be used in type contexts"
-              ""
-              loc
-              [])
+    check_block ctx stmts expected
 
-(** Convert an expression to a type expression *)
-and expr_to_type_expr env (expr_kind, loc) =
-  match expr_kind with
+  (* Default: infer the type, then check it matches *)
+  | _ ->
+    infer ctx expr >>= fun inferred ->
+    if Eval.conv ctx.level inferred expected then Ok ()
+    else Error (type_mismatch_error ctx expected inferred loc)
+
+(** Check a lambda against an expected type (must be a Pi type) *)
+and check_lambda ctx name body expected loc =
+  match expected with
+  | VPi (_, domain, codomain_clos) ->
+    (* Introduce a fresh variable for the parameter *)
+    let (fresh, ctx') = bind ctx name domain in
+    (* Compute the expected return type by applying the codomain closure *)
+    let codomain = Eval.apply_closure codomain_clos fresh in
+    (* Check the body against the expected return type *)
+    check ctx' body codomain
+  | _ ->
+    Error (make_error 1002
+      ("Lambda requires a function type, got "
+       ^ Eval.show_value ctx.level expected)
+      loc)
+
+(** Check a block of statements against an expected type *)
+and check_block ctx (stmts : sttm list) (expected : value)
+    : (unit, compiler_error) result =
+  match stmts with
+  | [] ->
+    if Eval.conv ctx.level VUnitType expected then Ok ()
+    else Error (type_mismatch_error ctx expected VUnitType dummy_pos)
+  | [(SttmExpr expr, _)] ->
+    check ctx expr expected
+  | (SttmLet (pattern, rhs), _) :: rest ->
+    infer ctx rhs >>= fun rhs_ty ->
+    let rhs_val = Eval.eval ctx.env rhs in
+    let ctx' = bind_pattern_ctx ctx pattern rhs_ty rhs_val in
+    check_block ctx' rest expected
+  | (SttmExpr expr, _) :: rest ->
+    infer ctx expr >>= fun _ ->
+    check_block ctx rest expected
+
+(** INFER mode: determine the type of [expr].
+
+    Each construct has a natural type:
+    - Variables: look up in context
+    - Literals: [int] or [string]
+    - Pi types: always [Type] (a type of types)
+    - Applications: infer function type, check argument, return codomain *)
+and infer ctx (expr : expr) : (value, compiler_error) result =
+  let (kind, loc) = expr in
+  match kind with
   | ExprVar (name, _) ->
-      (match Type_env.lookup env name with
-       | Some ty -> Ok ty
-       | None -> Error (unbound_variable_error name loc))
-  
+    (match List.assoc_opt name ctx.types with
+     | Some ty -> Ok ty
+     | None -> Error (unbound_var_error name loc))
+
+  | ExprLit (LitInt _, _) -> Ok VIntType
+  | ExprLit (LitString _, _) -> Ok VStringType
+
+  (* Pi types have type Type — but we must check that domain and codomain
+     are themselves valid types *)
+  | ExprPi (name_opt, domain, codomain) ->
+    check ctx domain VType >>= fun () ->
+    let domain_val = Eval.eval ctx.env domain in
+    let bound_name = match name_opt with Some (n, _) -> n | None -> "_" in
+    let (_, ctx') = bind ctx bound_name domain_val in
+    check ctx' codomain VType >>= fun () ->
+    Ok VType
+
+  (* Lambdas cannot be inferred — we need the domain type from context *)
+  | ExprLambda _ ->
+    Error (make_error 1003
+      "Cannot infer type of lambda without context; add a type annotation"
+      loc)
+
+  (* Application: infer function type, check args against domains *)
   | ExprCall (func, args) ->
-      (match func with
-       | (ExprVar type_name, _) ->
-           type_check_args env args >>= fun arg_types ->
-           Ok (TypeApp (fst type_name, arg_types))
-       | _ -> 
-           Error (make_type_error 
-                   error_undefined_type
-                   "Invalid type application"
-                   ""
-                   loc
-                   []))
-  
-  | ExprPi (Some (name, _), param_type, return_type) ->
-      expr_to_type_expr env param_type >>= fun param_ty ->
-      let local_env = Type_env.copy env in
-      Type_env.add local_env name param_ty;
-      expr_to_type_expr local_env return_type >>= fun return_ty ->
-      Ok (TypeArrow (param_ty, return_ty))
-  
-  | ExprPi (None, param_type, return_type) ->
-      expr_to_type_expr env param_type >>= fun param_ty ->
-      expr_to_type_expr env return_type >>= fun return_ty ->
-      Ok (TypeArrow (param_ty, return_ty))
-  
-  | _ -> 
-      Error (make_type_error 
-              error_undefined_type
-              "Invalid type expression"
-              ""
-              loc
-              [])
+    infer ctx func >>= fun func_ty ->
+    infer_app ctx func_ty args loc
 
-(** Check argument types for type applications *)
-and type_check_args env args =
-  let rec check_args acc = function
-    | [] -> Ok (List.rev acc)
-    | arg :: rest ->
-        expr_to_type_expr env arg >>= fun ty ->
-        check_args (ty :: acc) rest
-  in
-  check_args [] args
+  | ExprMatch (scrutinee, cases) ->
+    infer_match ctx scrutinee cases loc
 
-(** Type check a pattern and return variable bindings *)
-and type_check_pattern env (pattern_kind, loc) expected_type =
-  match pattern_kind with
-  | PVar (name, _) ->
-      (* Pattern variables bind the scrutinee's type to the variable *)
-      Ok [(name, expected_type)]
-  
-  | PLit lit ->
-      let lit_type = type_check_literal lit in
-      if type_compatible lit_type expected_type then
-        (* Literal patterns don't bind variables *)
-        Ok []
-      else
-        Error (type_mismatch_error expected_type lit_type loc)
-  
-  | PWildcard ->
-      (* Wildcard patterns don't bind variables *)
-      Ok []
-  
-  | PConstructor ((name, _), args) ->
-      (* Look up the constructor type *)
-      match Type_env.lookup env name with
-       | Some (TypeArrow (param_type, return_type)) ->
-           (* Constructor must return an instance of the expected type *)
-           if type_compatible return_type expected_type then
-             match args with
-             | [arg] -> 
-                 (* Handle single argument constructors *)
-                 type_check_pattern env arg param_type
-             | [] -> 
-                 (* Nullary constructors (no arguments) *)
-                 Ok []
-             | _ -> 
-                 (* Multi-argument constructors not yet supported *)
-                 Error (pattern_match_error 
-                        "Multiple argument constructors not yet supported" 
-                        loc)
-           else
-             Error (type_mismatch_error expected_type return_type loc)
-       | Some ty ->
-           (* The constructor is not a function *)
-           Error (type_mismatch_error expected_type ty loc)
-       | None ->
-           (* Constructor not found *)
-           Error (unbound_variable_error name loc)
+  | ExprBlock stmts ->
+    infer_block ctx stmts loc
 
-(** Type check a variable reference *)
-and type_check_var env name loc expected_type_opt =
-  match Type_env.lookup env name with
-  | Some ty -> 
-      (match expected_type_opt with
-       | Some expected_type ->
-           if type_compatible ty expected_type then
-             Ok expected_type
-           else
-             Error (type_mismatch_error expected_type ty loc)
-       | None -> Ok ty)
-  | None -> 
-      Error (unbound_variable_error name loc)
+  | ExprAccess (record, (ExprVar (field, _), _)) ->
+    infer_access ctx record field loc
 
-(** Type check a literal *)
-and type_check_lit lit loc expected_type_opt =
-  let lit_type = type_check_literal lit in
-  match expected_type_opt with
-  | Some expected_type ->
-      if type_compatible lit_type expected_type then
-        Ok expected_type
-      else
-        Error (type_mismatch_error expected_type lit_type loc)
-  | None -> Ok lit_type
+  | ExprAccess _ ->
+    Error (make_error 1005 "Invalid field access" loc)
 
-(** Type check a function call *)
-and type_check_call env func args loc expected_type_opt =
-  (* First type check the function expression *)
-  type_check_expr env func None >>= fun func_type ->
-  
-  match func_type with
-  | TypeArrow (param_type, return_type) ->
-      (* Handle function application based on argument count *)
-      match args with
-      | [arg] -> 
-          (* Type check the argument against the parameter type *)
-          type_check_expr env arg (Some param_type) >>= fun _ ->
-          (* Check if the return type matches the expected type, if any *)
-          (match expected_type_opt with
-           | Some expected_type ->
-               if type_compatible return_type expected_type then
-                 Ok expected_type
-               else
-                 Error (type_mismatch_error expected_type return_type loc)
-           | None -> Ok return_type)
-      | [] ->
-          (* Function call with no arguments *)
-          Error (make_type_error
-                  error_not_a_function
-                  "Function call with no arguments"
-                  ""
-                  loc
-                  [])
-      | _ ->
-          (* Multiple arguments would require curried functions or tuples *)
-          Error (make_type_error
-                  error_not_a_function
-                  "Multiple arguments not yet supported"
-                  ""
-                  loc
-                  [])
-  | _ ->
-      (* Not a function type *)
-      Error (not_a_function_error func_type loc)
+(** Infer the result type of a function application.
+    For [f(a, b, c)], we process arguments one at a time:
+    1. [f : (x:A) -> B] applied to [a] gives [B[x:=a]]
+    2. Then apply that to [b], etc. *)
+and infer_app ctx func_ty args loc =
+  match args with
+  | [] -> Ok func_ty
+  | arg :: rest ->
+    (match func_ty with
+     | VPi (_, domain, codomain_clos) ->
+       check ctx arg domain >>= fun () ->
+       let arg_val = Eval.eval ctx.env arg in
+       let result_ty = Eval.apply_closure codomain_clos arg_val in
+       infer_app ctx result_ty rest loc
+     | _ ->
+       Error (not_a_function_error ctx func_ty loc))
 
-(** Type check a match expression *)
-and type_check_match env scrutinee cases loc expected_type_opt =
-  (* First type check the scrutinee to determine what we're matching on *)
-  type_check_expr env scrutinee None >>= fun scrutinee_type ->
-  
-  (* Process each case and ensure consistent result types *)
-  let process_case result_type_opt (pattern, expr) =
-    (* Type check the pattern against the scrutinee type *)
-    type_check_pattern env pattern scrutinee_type >>= fun bindings ->
-    
-    (* Create a new environment with pattern bindings *)
-    let case_env = Type_env.copy env in
-    List.iter (fun (name, ty) -> Type_env.add case_env name ty) bindings;
-    
-    (* Type check the case expression *)
-    type_check_expr case_env expr expected_type_opt >>= fun case_type ->
-    
-    (* Ensure all cases have the same type *)
-    match result_type_opt with
-    | Some prev_type ->
-        if type_compatible prev_type case_type then
-          Ok (Some case_type)
-        else
-          Error (make_type_error
-                  error_type_mismatch
-                  "Match cases have inconsistent types"
-                  ""
-                  loc
-                  [])
-    | None -> Ok (Some case_type)
-  in
-  
-  (* Process all cases to ensure they have consistent types *)
-  let rec check_cases result_type_opt = function
-    | [] -> 
-        (match result_type_opt with
-         | Some t -> Ok t
-         | None -> 
-             Error (make_type_error
-                     error_type_mismatch
-                     "Cannot determine type of empty match expression"
-                     ""
-                     loc
-                     []))
-    | case :: rest ->
-        process_case result_type_opt case >>= fun new_result_type_opt ->
-        check_cases new_result_type_opt rest
-  in
-  
-  (* Ideally, we would check exhaustiveness here *)
-  (* For now, we just check for consistent types *)
-  check_cases None cases
-
-(** Type check a block of statements *)
-and type_check_block env stmts _ expected_type_opt =
-  let block_env = Type_env.copy env in
-  
-  let rec check_stmts = function
-    | [] -> 
-        (* Empty block has unit type *)
-        Ok type_unit
-    | [(SttmExpr expr, _)] ->
-        (* Last expression determines the block's type *)
-        type_check_expr block_env expr expected_type_opt
-    | (SttmLet (pattern, expr), _) :: rest ->
-        (* Type check the binding expression *)
-        type_check_expr block_env expr None >>= fun expr_type ->
-        (* Type check the pattern against the expression type *)
-        type_check_pattern block_env pattern expr_type >>= fun bindings ->
-        
-        (* Add bindings to the environment *)
-        List.iter (fun (name, ty) -> Type_env.add block_env name ty) bindings;
-        
-        (* Continue with the rest of the statements *)
-        check_stmts rest
-    | (SttmExpr expr, _) :: rest ->
-        (* Non-final expressions are evaluated for side effects *)
-        type_check_expr block_env expr None >>= fun _ ->
-        check_stmts rest
-  in
-  
-  check_stmts stmts
-
-(** Type check a lambda expression *)
-and type_check_lambda env (name, _) body loc expected_type_opt =
-  match expected_type_opt with
-  | Some (TypeArrow (param_type, return_type)) ->
-      (* Create environment with parameter binding *)
-      let lambda_env = Type_env.copy env in
-      Type_env.add lambda_env name param_type;
-      
-      (* Type check the body with the expected return type *)
-      type_check_expr lambda_env body (Some return_type) >>= fun body_type ->
-      
-      (* Check if body type matches expected return type *)
-      if type_compatible body_type return_type then
-        Ok (TypeArrow (param_type, body_type))
-      else
-        Error (type_mismatch_error return_type body_type loc)
-  
-  | Some other_type ->
-      (* Expected type is not a function type *)
-      Error (make_type_error
-              error_type_mismatch
-              ("Expected a function type, got " ^ show_type_expr other_type)
-              ""
-              loc
-              [])
-  
-  | None ->
-      (* No expected type, can't infer lambda type without context *)
-      Error (make_type_error
-              error_type_mismatch
-              "Cannot infer type for lambda without context"
-              ""
-              loc
-              [])
-
-(** Type check a record field access *)
-and type_check_access env record field loc expected_type_opt =
-  match field with
-  | (ExprVar (field_name, _), _) ->
-      (* Type check the record expression *)
-      type_check_expr env record None >>= fun record_type ->
-      
-      match record_type with
-      | TypeRecord fields ->
-          (* Look up the field in the record type *)
-          (match List.find_opt (fun (name, _) -> name = field_name) fields with
-           | Some (_, field_type) ->
-               (* Check if field type matches expected type, if any *)
-               (match expected_type_opt with
-                | Some expected_type ->
-                    if type_compatible field_type expected_type then
-                      Ok expected_type
-                    else
-                      Error (type_mismatch_error expected_type field_type loc)
-                | None -> Ok field_type)
-           | None ->
-               (* Field not found in record *)
-               Error (make_type_error
-                       error_undefined_type
-                       ("Record does not have field: " ^ field_name)
-                       ""
-                       loc
-                       []))
-      | TypeVar _ | TypeConst _ | TypeApp (_, _) | TypeArrow (_, _) ->
-          (* Not a record type *)
-          Error (make_type_error
-                  error_type_mismatch
-                  ("Expected a record type, got " ^ show_type_expr record_type)
-                  ""
-                  loc
-                  [])
-  | _ ->
-      (* Not a variable expression for field access *)
-      Error (make_type_error
-              error_undefined_type
-              "Invalid field access expression"
-              ""
-              loc
-              [])
-
-(** Type checks a let declaration *)
-let type_check_let_decl env let_decl =
-  (* Convert parameter types *)
-  let rec process_params current_env acc = function
-    | [] -> Ok (List.rev acc, current_env)
-    | ((name, _), type_expr) :: rest ->
-        (* Convert expression to type expression *)
-        expr_to_type_expr current_env type_expr >>= fun param_type ->
-        (* Add parameter to environment for subsequent parameters *)
-        let updated_env = Type_env.copy current_env in
-        Type_env.add updated_env (fst name) param_type;
-        (* Continue with rest of parameters *)
-        process_params updated_env ((fst name, param_type) :: acc) rest
-  in
-  
-  (* Process all parameters *)
-  process_params env [] (List.map (fun ((name, pos), expr) -> ((name, ()), pos), expr) let_decl.params) >>= fun (param_bindings, param_env) ->
-  
-  (* Convert return type expression to type *)
-  expr_to_type_expr param_env let_decl.return_type >>= fun return_type ->
-  
-  (* Type check the function body against the return type *)
-  type_check_expr param_env let_decl.body (Some return_type) >>= fun body_type ->
-  
-  (* Check if body type matches return type *)
-  if type_compatible body_type return_type then
-    (* Create the function type (fold parameters right-to-left) *)
-    let func_type = List.fold_right
-      (fun (_, param_type) acc -> TypeArrow (param_type, acc))
-      param_bindings
-      return_type
+(** Infer the type of a match expression.
+    All branches must have the same type. *)
+and infer_match ctx scrutinee cases loc =
+  infer ctx scrutinee >>= fun scrut_ty ->
+  match cases with
+  | [] -> Error (make_error 1007 "Empty match expression" loc)
+  | (first_pat, first_body) :: rest_cases ->
+    let ctx' = bind_match_pattern ctx first_pat scrut_ty in
+    infer ctx' first_body >>= fun result_ty ->
+    let rec check_rest = function
+      | [] -> Ok result_ty
+      | (pat, body) :: rest ->
+        let ctx' = bind_match_pattern ctx pat scrut_ty in
+        check ctx' body result_ty >>= fun () ->
+        check_rest rest
     in
-    
-    (* Add the function to the environment *)
-    let result_env = Type_env.copy env in
-    Type_env.add result_env (fst let_decl.name) func_type;
-    Ok result_env
-  else
-    (* Body type doesn't match return type *)
-    Error (make_type_error
-            error_return_type_mismatch
-            ("Function body type " ^ show_type_expr body_type ^ 
-             " doesn't match declared return type " ^ show_type_expr return_type)
-            ""
-            (snd let_decl.name)
-            [])
+    check_rest rest_cases
 
-(** Type checks a type declaration *)
-let type_check_type_decl env (type_def : type_decl) =
-  let type_name = fst type_def.name in
-  
-  (* Process type parameters (binders) *)
-  let rec process_type_binders current_env = function
-    | [] -> Ok current_env
-    | ((name, expr_opt), _) :: rest ->
-        (match expr_opt with
-         | Some type_expr ->
-             (* Convert expression to type *)
-             expr_to_type_expr current_env type_expr >>= fun param_type ->
-             let updated_env = Type_env.copy current_env in
-             Type_env.add updated_env (fst name) param_type;
-             process_type_binders updated_env rest
-         | None ->
-             (* If no type is specified, assume it's a type *)
-             let updated_env = Type_env.copy current_env in
-             Type_env.add updated_env (fst name) (TypeConst "type");
-             process_type_binders updated_env rest)
-  in
-  
-  (* Process all type binders *)
-  process_type_binders env type_def.binders >>= fun binder_env ->
-  
-  (* Create the result environment that will contain all type definitions *)
-  let result_env = Type_env.copy env in
-  
-  (* Add the type itself to the result environment *)
-  Type_env.add result_env type_name (TypeConst "type");
-  
-  (* Get type parameters if any *)
-  let type_params = 
-    List.map 
-      (fun ((name, _), _) -> TypeVar (fst name)) 
-      type_def.binders 
-  in
-  
-  (* Create the type application with parameters *)
-  let type_app = TypeApp (type_name, type_params) in
-  
-  match type_def.value with
-  | TyInductive variants ->
-      (* Process each variant constructor *)
-      let process_variant (name, types) =
-        (* Convert constructor parameter types with proper error handling *)
-        let rec process_params acc = function
-          | [] -> Ok (List.rev acc)
-          | expr :: rest ->
-              expr_to_type_expr binder_env expr >>= fun ty ->
-              process_params (ty :: acc) rest
-        in
-        
-        process_params [] types >>= fun param_types ->
-        
-        (* Create the constructor type as a function from params to the type *)
-        let constructor_type = 
-          List.fold_right
-            (fun param_type acc -> TypeArrow (param_type, acc))
-            param_types
-            type_app  (* Constructor returns the parameterized type *)
-        in
-        
-        Type_env.add result_env (fst name) constructor_type;
-        Ok ()
-      in
-      
-      (* Process all variants with proper error handling *)
-      let rec process_variants = function
-        | [] -> Ok result_env
-        | variant :: rest ->
-            process_variant variant >>= fun () ->
-            process_variants rest
-      in
-      process_variants variants
-  
-  | TyStruct fields ->
-      (* Convert field types with proper error handling *)
-      let rec process_fields acc = function
-        | [] -> Ok (List.rev acc)
-        | (name, type_expr) :: rest ->
-            expr_to_type_expr binder_env type_expr >>= fun ty ->
-            process_fields ((fst name, ty) :: acc) rest
-      in 
-      process_fields [] fields >>= fun field_types ->
-      
-      (* Register the type as a record type *)
-      Type_env.add result_env type_name (TypeRecord field_types);
-      
-      Ok result_env
+(** Infer the type of a block *)
+and infer_block ctx (stmts : sttm list) loc =
+  match stmts with
+  | [] -> Ok VUnitType
+  | [(SttmExpr expr, _)] -> infer ctx expr
+  | (SttmLet (pattern, rhs), _) :: rest ->
+    infer ctx rhs >>= fun rhs_ty ->
+    let rhs_val = Eval.eval ctx.env rhs in
+    let ctx' = bind_pattern_ctx ctx pattern rhs_ty rhs_val in
+    infer_block ctx' rest loc
+  | (SttmExpr expr, _) :: rest ->
+    infer ctx expr >>= fun _ ->
+    infer_block ctx rest loc
 
-(** Type checks a declaration *)
-let type_check_decl env decl =
+(** Infer the type of a field access *)
+and infer_access ctx record field loc =
+  infer ctx record >>= fun record_ty ->
+  match record_ty with
+  | VRecordType fields ->
+    (match List.assoc_opt field fields with
+     | Some field_ty -> Ok field_ty
+     | None ->
+       Error (make_error 1005
+         ("Record type has no field: " ^ field) loc))
+  | _ ->
+    Error (make_error 1005
+      ("Expected a record type, got " ^ Eval.show_value ctx.level record_ty)
+      loc)
+
+(** Bind a pattern variable to the scrutinee's type in the context *)
+and bind_match_pattern ctx (pattern : pattern) (scrut_ty : value) : ctx =
+  let (kind, _) = pattern in
+  match kind with
+  | PVar (name, _) -> snd (bind ctx name scrut_ty)
+  | _ -> ctx
+
+(** Bind a let-pattern into the context with a known type and value *)
+and bind_pattern_ctx ctx (pattern : pattern) ty v =
+  let (kind, _) = pattern in
+  match kind with
+  | PVar (name, _) -> define ctx name ty v
+  | _ -> ctx
+
+
+(* ========================================================================
+   DECLARATION TYPE CHECKING
+   ======================================================================== *)
+
+(** Type check a let declaration.
+
+    For [let f (x: A, y: B) : C = body]:
+    1. Check that [A], [B], [C] are valid types (check against [Type])
+    2. Introduce parameters as fresh variables
+    3. Check [body] against [C]
+    4. Build the function type [(x:A) -> (y:B) -> C]
+    5. Add [f] to the context *)
+let type_check_let_decl ctx (decl : let_decl) =
+  (* Process parameters: check each type annotation and bind the parameter *)
+  let rec process_params ctx = function
+    | [] -> Ok ctx
+    | ((name, _), type_expr) :: rest ->
+      check ctx type_expr VType >>= fun () ->
+      let param_ty = Eval.eval ctx.env type_expr in
+      let (_, ctx') = bind ctx name param_ty in
+      process_params ctx' rest
+  in
+  process_params ctx decl.params >>= fun body_ctx ->
+
+  (* Check the return type annotation is a valid type *)
+  check body_ctx decl.return_type VType >>= fun () ->
+  let return_ty = Eval.eval body_ctx.env decl.return_type in
+
+  (* Check the body against the return type *)
+  check body_ctx decl.body return_ty >>= fun () ->
+
+  (* Build the overall function type by wrapping params as Pi types *)
+  let func_type_expr = build_pi_type decl.params decl.return_type in
+  let func_ty = Eval.eval ctx.env func_type_expr in
+
+  (* Build the function value by wrapping body in lambdas *)
+  let func_body_expr = build_lambda decl.params decl.body in
+  let func_val = Eval.eval ctx.env func_body_expr in
+
+  Ok (define ctx (fst decl.name) func_ty func_val)
+
+(** Type check a type declaration.
+
+    For [type Option = | Some(int) | None]:
+    1. Register the type name
+    2. For each constructor, compute its type and register it
+
+    For [type User = { name: string, age: int }]:
+    1. Check each field type
+    2. Register the type as a record type *)
+let type_check_type_decl ctx (decl : type_decl) =
+  let type_name = fst decl.name in
+
+  (* Register the type name first so constructors can reference it *)
+  let type_val = VDataType (type_name, []) in
+  let ctx = define ctx type_name VType type_val in
+
   match decl.value with
-  | LetDecl let_decl -> type_check_let_decl env let_decl
-  | TypeDef type_def -> type_check_type_decl env type_def
+  | TyInductive variants ->
+    let rec process_variants ctx = function
+      | [] -> Ok ctx
+      | ((ctor_name, ctor_pos), arg_types) :: rest ->
+        (* Check all constructor argument types are valid *)
+        let rec check_arg_types = function
+          | [] -> Ok ()
+          | arg :: rest_args ->
+            check ctx arg VType >>= fun () ->
+            check_arg_types rest_args
+        in
+        check_arg_types arg_types >>= fun () ->
 
-(** Type checks a program (list of declarations) *)
-let type_check_program program =
-  let initial_env = Type_env.initial_env () in
-  
-  (* Type check each declaration in order, accumulating environment *)
-  let rec check_decls current_env = function
-    | [] -> Ok current_env
+        (* Build the constructor type: arg1 -> arg2 -> ... -> T *)
+        let ctor_type_expr =
+          List.fold_right (fun arg_ty acc ->
+            (ExprPi (None, arg_ty, acc), dummy_pos)
+          ) arg_types (ExprVar (type_name, ctor_pos), dummy_pos)
+        in
+        let ctor_ty = Eval.eval ctx.env ctor_type_expr in
+        let ctor_val = VConstructor (ctor_name, []) in
+        let ctx = define ctx ctor_name ctor_ty ctor_val in
+        process_variants ctx rest
+    in
+    process_variants ctx variants
+
+  | TyStruct fields ->
+    (* Check each field type *)
+    let rec check_fields = function
+      | [] -> Ok ()
+      | ((_, _), type_expr) :: rest ->
+        check ctx type_expr VType >>= fun () ->
+        check_fields rest
+    in
+    check_fields fields >>= fun () ->
+
+    (* Build the record type value *)
+    let field_types = List.map (fun ((name, _), type_expr) ->
+      (name, Eval.eval ctx.env type_expr)
+    ) fields in
+
+    (* Redefine the type name with the record type as its value *)
+    let ctx = define ctx type_name VType (VRecordType field_types) in
+    Ok ctx
+
+(** Type check a declaration *)
+let type_check_decl ctx (decl : declaration) =
+  match decl.value with
+  | LetDecl ld -> type_check_let_decl ctx ld
+  | TypeDef td -> type_check_type_decl ctx td
+
+(** Type check an entire program *)
+let type_check_program (program : program) : (unit, compiler_error) result =
+  let ctx = initial_ctx () in
+  let rec go ctx = function
+    | [] -> Ok ()
     | decl :: rest ->
-        type_check_decl current_env decl >>= fun updated_env ->
-        check_decls updated_env rest
+      type_check_decl ctx decl >>= fun ctx' ->
+      go ctx' rest
   in
-  check_decls initial_env program
+  go ctx program
