@@ -18,11 +18,15 @@ let handle_error file buf id message hints =
 
 let parse file (buf : Sedlexing.lexbuf) =
   try
-    let ast = MenhirLib.Convert.Simplified.traditional2revised Grammar.program (Lexer.provider buf) in
+    let ast =
+      MenhirLib.Convert.Simplified.traditional2revised Grammar.program
+        (Lexer.provider buf)
+    in
     Ok ast
   with
-    | Lexer.Invalid_token msg -> Error (handle_error file buf 1 ("Lexical error: " ^ msg) [])
-    | Grammar.Error -> Error (handle_error file buf 2 "Parse error" [])
+  | Lexer.Invalid_token msg ->
+      Error (handle_error file buf 1 ("Lexical error: " ^ msg) [])
+  | Grammar.Error -> Error (handle_error file buf 2 "Parse error" [])
 
 (* Parses a source string from the given string. *)
 let parse_from_source file source =

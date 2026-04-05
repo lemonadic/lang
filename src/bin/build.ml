@@ -19,7 +19,7 @@ type compiler_options = {
   features : bool;
 }
 
-let print_features ()  =
+let print_features () =
   print_endline "Supported features:";
   print_endline "- Compilation from files or stdin";
   print_endline "- Multiple backends (e.g., LLVM)";
@@ -28,16 +28,15 @@ let print_features ()  =
 
 let read_until_eof () =
   let buffer = Buffer.create 2048 in
-  let rec read_loop() =
-    let line = try Some(read_line()) with End_of_file -> None in
+  let rec read_loop () =
+    let line = try Some (read_line ()) with End_of_file -> None in
     match line with
     | None -> Buffer.contents buffer
-    | Some(line) -> (
-      Buffer.add_string buffer (line ^ "\n");
-      read_loop()
-    )
+    | Some line ->
+        Buffer.add_string buffer (line ^ "\n");
+        read_loop ()
   in
-  read_loop()
+  read_loop ()
 
 let parse_from_stdin json_output =
   let source_code = read_until_eof () in
@@ -45,18 +44,16 @@ let parse_from_stdin json_output =
 
   match parsed with
   | Ok ast ->
-    if json_output then
-      failwith "TODO implement json output"
-    else
-      print_endline (Ast.show_program ast);
-      `Ok()
+      if json_output then failwith "TODO implement json output"
+      else print_endline (Ast.show_program ast);
+      `Ok ()
   | Error error ->
-    Errors.print_compiler_error Format.err_formatter error source_code;
-    exit 1
+      Errors.print_compiler_error Format.err_formatter error source_code;
+      exit 1
 
 let compile options () =
   Printf.printf "Compiling files: %s\n" (String.concat ", " options.input_files);
-  
+
   (* Parse the input files *)
   let parse_file filename =
     let channel = open_in filename in
@@ -64,26 +61,25 @@ let compile options () =
     close_in channel;
     result
   in
-  
+
   (* Parse all input files and combine into a single program *)
-  let parsed_programs = 
+  let parsed_programs =
     List.map parse_file options.input_files
-    |> List.fold_left 
-         (fun acc result -> 
+    |> List.fold_left
+         (fun acc result ->
            match acc, result with
            | Ok acc_prog, Ok file_prog -> Ok (acc_prog @ file_prog)
            | Error e, _ -> Error e
            | _, Error e -> Error e)
          (Ok [])
   in
-  
+
   match parsed_programs with
   | Ok program ->
       (* Type check the program *)
       (match Type_checker.type_check_program program with
-       | Ok _ -> 
+       | Ok _ ->
            Printf.printf "Type checking successful!\n";
-           (* Continue with code generation *)
            `Ok ()
        | Error error ->
            Errors.print_compiler_error Format.err_formatter error "";

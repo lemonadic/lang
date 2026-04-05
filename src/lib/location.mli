@@ -6,21 +6,13 @@ Authors: Sofia Rodrigues
 *)
 
 (* A point in the source code defined using line and column. *)
-type point = {
-  line: int;
-  column: int
-}
-[@@deriving show]
+type point = { line : int; column : int } [@@deriving show]
 
 (* A position represents a location in the source code. *)
-type position = {
-  start_pos: point;
-  end_pos: point;
-}
-[@@deriving show]
+type position = { start_pos : point; end_pos : point } [@@deriving show]
 
-(** Expands a list of ranges into a set of selected line numbers. *)
 val expand_positions : position list -> int list
+(** Expands a list of ranges into a set of selected line numbers. *)
 
 (* Creates an AST position using the Menhir internal position *)
 val mk_ast_position : Lexing.position * Lexing.position -> position
